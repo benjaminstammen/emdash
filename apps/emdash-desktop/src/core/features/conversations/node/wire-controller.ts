@@ -201,6 +201,7 @@ export function createConversationsWireController(
       conversationOperations.markConversationSeen(conversationId),
     listHostConversations: (scope) => conversationOperations.listHostConversations(scope),
     linkConversationToTask: (input) => conversationOperations.linkConversationToTask(input),
+    importHostConversation: (input) => conversationOperations.importHostConversation(input),
     deleteHostConversation: ({ conversationId }) =>
       conversationOperations.deleteHostConversation(conversationId),
     events: conversationWireEvents,

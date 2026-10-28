@@ -257,6 +257,22 @@ export const conversationsContract = defineContract({
     input: z.object({ conversationId: z.string(), projectId: z.string(), taskId: z.string() }),
     output: z.void(),
   }),
+  /**
+   * Claim a host-durable unlinked conversation onto this desktop: ensure a local
+   * project for its repository, create a task on the mirrored workspace, annotate.
+   */
+  importHostConversation: procedure({
+    input: z.object({
+      conversationId: z.string(),
+      taskName: z.string().optional(),
+      projectName: z.string().optional(),
+    }),
+    output: z.object({
+      projectId: z.string(),
+      taskId: z.string(),
+      createdProject: z.boolean(),
+    }),
+  }),
   deleteHostConversation: procedure({
     input: z.object({ conversationId: z.string() }),
     output: z.void(),

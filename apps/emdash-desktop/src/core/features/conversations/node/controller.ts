@@ -15,6 +15,7 @@ import { getConversations } from './getConversations';
 import { getConversationsForProject } from './getConversationsForProject';
 import { getConversationsForTask } from './getConversationsForTask';
 import { hydrateConversation } from './hydrateConversation';
+import { importHostConversation } from './import-host-conversation';
 import { linkConversationToTask } from './link-conversation-to-task';
 import { listHostConversations } from './list-host-conversations';
 import { markConversationSeen } from './markConversationSeen';
@@ -79,6 +80,8 @@ export function createConversationOperations(dependencies: {
       listHostConversations(db, scope),
     linkConversationToTask: (input: Parameters<typeof linkConversationToTask>[1]) =>
       linkConversationToTask(db, input),
+    importHostConversation: (input: Parameters<typeof importHostConversation>[1]) =>
+      importHostConversation(db, input),
     deleteHostConversation: (conversationId: string) =>
       deleteHostConversation(db, dependencies.runtimes, conversationId, telemetry),
   };

@@ -6,14 +6,23 @@ import {
   useQueryListSource,
   type CollectionViewColumn,
 } from '@emdash/ui/react/patterns';
-import { Button, DropdownMenu, Spinner, toast } from '@emdash/ui/react/primitives';
+import { Button, DropdownMenu, Spinner, ToggleGroup, toast } from '@emdash/ui/react/primitives';
 import { useQueryClient } from '@tanstack/react-query';
-import { EllipsisIcon, Link2Icon, MessageSquareIcon, Trash2Icon, WifiOffIcon } from 'lucide-react';
+import {
+  DownloadIcon,
+  EllipsisIcon,
+  Link2Icon,
+  MessageSquareIcon,
+  Trash2Icon,
+  WifiOffIcon,
+} from 'lucide-react';
 import { observer } from 'mobx-react-lite';
 import { useMemo, useState } from 'react';
+import { taskViewDef } from '@core/features/tasks/contributions/views';
 import { useWorkspaceGroups } from '@core/features/workspaces/api/browser/use-workspace-groups';
 import { useOpenModal } from '@core/manifests/browser/modal-api';
 import { useSearchFocusHotkeys } from '@core/primitives/keybindings/browser';
+import { useNavigate } from '@core/primitives/navigation/browser/navigation-hooks';
 import { cn } from '@core/primitives/styling/browser/cn';
 import {
   joinMachineConversationRows,
@@ -25,11 +34,14 @@ import {
 } from '../machine-conversations-list-model';
 import {
   deleteMachineConversation,
+  importMachineConversation,
   linkMachineConversation,
   machineConversationsQueryKey,
   useMachineConversations,
   type MachineConversationsScope,
 } from '../use-machine-conversations';
+
+type LinkFilter = 'all' | 'unlinked';
 
 const CONVERSATION_COLUMNS: CollectionViewColumn<MachineConversationItem>[] = [
   {
@@ -71,9 +83,9 @@ const CONVERSATION_COLUMNS: CollectionViewColumn<MachineConversationItem>[] = [
 
 /**
  * Every cached conversation record of a host (spec §8) — task-linked and
- * orphaned alike — with per-record link and delete affordances. The list reads
- * this device's registry cache, so it keeps serving (labeled) while the host
- * is unreachable.
+ * orphaned alike — with per-record link, import, and delete affordances. The
+ * list reads this device's registry cache, so it keeps serving (labeled) while
+ * the host is unreachable.
  */
 export function MachineConversationsList({
   scope,
@@ -83,11 +95,14 @@ export function MachineConversationsList({
   hostReachable: boolean;
 }) {
   const queryClient = useQueryClient();
+  const { navigate } = useNavigate();
   const conversationsQuery = useMachineConversations(scope);
   const openLinkModal = useOpenModal('linkConversationModal');
+  const openImportModal = useOpenModal('importConversationModal');
   const openConfirm = useOpenModal('confirmActionModal');
   const searchRef = useSearchFocusHotkeys();
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [linkFilter, setLinkFilter] = useState<LinkFilter>('all');
 
   // Dangling-path detection is a client presentation over workspace observations
   // (spec §7.5) — only asserted once the workspace listing for this host has loaded.
@@ -117,11 +132,17 @@ export function MachineConversationsList({
     [conversationsQuery.data, knownWorkspacePaths]
   );
 
+  const filteredItems = useMemo(
+    () => (linkFilter === 'unlinked' ? items.filter((item) => !item.linked) : items),
+    [items, linkFilter]
+  );
+  const unlinkedCount = useMemo(() => items.filter((item) => !item.linked).length, [items]);
+
   // `items` joins the conversations query with workspace observations, so it
   // stands in for the query's data; loading/error come from the query itself.
   const source = useQueryListSource(
     {
-      data: items,
+      data: filteredItems,
       isLoading: conversationsQuery.isLoading,
       isError: conversationsQuery.isError,
       error: conversationsQuery.error,
@@ -149,6 +170,33 @@ export function MachineConversationsList({
       await refresh();
     } catch (error) {
       toast.error('Could not link conversation', {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const importConversation = async (item: MachineConversationItem) => {
+    const outcome = await openImportModal({
+      conversationTitle: item.conversation.title,
+      workspacePath: item.conversation.workspacePath,
+      suggestedTaskName: item.conversation.title.trim() || 'Imported conversation',
+    });
+    if (!outcome.success) return;
+    setBusyId(item.conversation.id);
+    try {
+      const imported = await importMachineConversation({
+        conversationId: item.conversation.id,
+        taskName: outcome.data.taskName,
+      });
+      await refresh();
+      toast.success(
+        imported.createdProject ? 'Imported onto a new project' : 'Imported onto this device'
+      );
+      navigate(taskViewDef({ projectId: imported.projectId, taskId: imported.taskId }));
+    } catch (error) {
+      toast.error('Could not import conversation', {
         description: error instanceof Error ? error.message : String(error),
       });
     } finally {
@@ -187,6 +235,7 @@ export function MachineConversationsList({
         <ConversationActionsCell
           item={item}
           busy={busyId === item.conversation.id}
+          onImport={() => void importConversation(item)}
           onLink={() => void linkConversation(item)}
           onDelete={() => void deleteConversation(item)}
         />
@@ -203,7 +252,10 @@ export function MachineConversationsList({
           <ConversationsToolbar
             view={view}
             searchRef={searchRef}
-            total={items.length}
+            total={filteredItems.length}
+            unlinkedCount={unlinkedCount}
+            linkFilter={linkFilter}
+            onLinkFilterChange={setLinkFilter}
             hostReachable={hostReachable}
           />
         }
@@ -223,8 +275,15 @@ export function MachineConversationsList({
             bare
             label={
               items.length > 0
-                ? 'No conversations match the current search.'
+                ? linkFilter === 'unlinked'
+                  ? 'No unlinked conversations on this machine.'
+                  : 'No conversations match the current search.'
                 : 'No conversations on this machine.'
+            }
+            description={
+              linkFilter === 'unlinked' && items.length > 0
+                ? 'Unlinked conversations are host sessions not yet claimed as a task on this device.'
+                : undefined
             }
           />
         }
@@ -237,16 +296,38 @@ const ConversationsToolbar = observer(function ConversationsToolbar({
   view,
   searchRef,
   total,
+  unlinkedCount,
+  linkFilter,
+  onLinkFilterChange,
   hostReachable,
 }: {
   view: MachineConversationsListViewModel;
   searchRef: React.RefObject<HTMLInputElement | null>;
   total: number;
+  unlinkedCount: number;
+  linkFilter: LinkFilter;
+  onLinkFilterChange: (filter: LinkFilter) => void;
   hostReachable: boolean;
 }) {
   const search = view.useSearch();
   return (
     <CollectionToolbar.Root>
+      <ToggleGroup.Root
+        value={[linkFilter]}
+        onValueChange={(values) => {
+          const next = values[0];
+          if (next === 'all' || next === 'unlinked') onLinkFilterChange(next);
+          // Ignore clears so one filter is always selected.
+        }}
+      >
+        <ToggleGroup.Item className="text-xs" value="all">
+          All
+        </ToggleGroup.Item>
+        <ToggleGroup.Item className="text-xs" value="unlinked">
+          Not on this device
+          {unlinkedCount > 0 ? ` (${unlinkedCount})` : ''}
+        </ToggleGroup.Item>
+      </ToggleGroup.Root>
       <CollectionToolbar.Search
         ref={searchRef}
         value={search.query}
@@ -304,11 +385,13 @@ function ConversationStatusCell({ item }: { item: MachineConversationItem }) {
 function ConversationActionsCell({
   item,
   busy,
+  onImport,
   onLink,
   onDelete,
 }: {
   item: MachineConversationItem;
   busy: boolean;
+  onImport: () => void;
   onLink: () => void;
   onDelete: () => void;
 }) {
@@ -329,6 +412,12 @@ function ConversationActionsCell({
         {busy ? <Spinner size="sm" /> : <EllipsisIcon className="size-3.5" />}
       </DropdownMenu.Trigger>
       <DropdownMenu.Content align="end">
+        {!item.linked && (
+          <DropdownMenu.Item onClick={onImport}>
+            <DownloadIcon />
+            Import…
+          </DropdownMenu.Item>
+        )}
         <DropdownMenu.Item onClick={onLink}>
           <Link2Icon />
           {item.linked ? 'Link to another task…' : 'Link to a task…'}

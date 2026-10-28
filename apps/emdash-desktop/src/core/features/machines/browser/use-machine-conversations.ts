@@ -44,6 +44,15 @@ export async function linkMachineConversation(input: {
   await client.linkConversationToTask(input);
 }
 
+export async function importMachineConversation(input: {
+  conversationId: string;
+  taskName?: string;
+  projectName?: string;
+}): Promise<{ projectId: string; taskId: string; createdProject: boolean }> {
+  const client = await getConversationsClient();
+  return client.importHostConversation(input);
+}
+
 export async function deleteMachineConversation(conversationId: string): Promise<void> {
   const client = await getConversationsClient();
   await client.deleteHostConversation({ conversationId });

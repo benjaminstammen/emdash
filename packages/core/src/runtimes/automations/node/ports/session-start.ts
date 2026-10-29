@@ -28,6 +28,10 @@ export interface AutomationSessionPort {
     fallbackTitle: string;
     signal: AbortSignal;
   }): Promise<Result<{ sessionId: string | null }, AutomationPortError>>;
+  stop(input: {
+    conversationId: string;
+    agentType: AutomationAgentConfig['type'];
+  }): Promise<Result<void, AutomationPortError>>;
 }
 
 export function createSessionPortFromDependencies(dependencies: {
@@ -113,6 +117,23 @@ export function createSessionPortFromDependencies(dependencies: {
       } catch (error) {
         return err({
           code: 'session_start_failed',
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    },
+
+    async stop({ conversationId, agentType }) {
+      try {
+        const result =
+          agentType === 'acp'
+            ? await dependencies.acp.terminate({ conversationId })
+            : await dependencies.tui.kill({ conversationId });
+        return result.success
+          ? ok(undefined)
+          : err({ code: result.error.type, message: result.error.message });
+      } catch (error) {
+        return err({
+          code: 'session_stop_failed',
           message: error instanceof Error ? error.message : String(error),
         });
       }

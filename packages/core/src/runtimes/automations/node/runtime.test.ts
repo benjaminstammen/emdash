@@ -59,6 +59,7 @@ function fakeWorkspacePort(): AutomationWorkspacePort {
 function fakeSessionPort(): AutomationSessionPort {
   return {
     start: vi.fn(() => Promise.resolve(ok({ sessionId: 'sess-1' }))),
+    stop: vi.fn(() => Promise.resolve(ok(undefined))),
   };
 }
 function runsOf(runtime: AutomationsRuntime, automationId: string) {

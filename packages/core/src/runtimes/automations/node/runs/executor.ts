@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { noopLogger, type Logger } from '@emdash/shared/logger';
 import type { AutomationRun } from '../../api/run';
 import type { AutomationPortError } from '../ports/port-error';
 import type { AutomationSessionPort } from '../ports/session-start';
@@ -10,6 +11,9 @@ export type AutomationRunExecutorOptions = {
   workspacePort: AutomationWorkspacePort;
   sessionPort: AutomationSessionPort;
   createConversationId?: () => string;
+  /** Earlier runs of the same automation whose sessions a new run supersedes. */
+  previousRuns?: (run: AutomationRun) => AutomationRun[];
+  logger?: Logger;
 };
 
 export type AutomationRunExecutor = (run: AutomationRun, signal: AbortSignal) => Promise<void>;
@@ -17,7 +21,36 @@ export type AutomationRunExecutor = (run: AutomationRun, signal: AbortSignal) =>
 export function createAutomationRunExecutor(
   options: AutomationRunExecutorOptions
 ): AutomationRunExecutor {
-  const { transitions, workspacePort, sessionPort, createConversationId = randomUUID } = options;
+  const {
+    transitions,
+    workspacePort,
+    sessionPort,
+    createConversationId = randomUUID,
+    previousRuns = () => [],
+    logger = noopLogger,
+  } = options;
+  const retiredRunIds = new Set<string>();
+
+  // A run is `done` once its agent starts, and nothing else ever stops that agent, so
+  // frequent schedules pile up live processes. Each new run stops its predecessors'.
+  const retirePreviousSessions = async (run: AutomationRun): Promise<void> => {
+    for (const previous of previousRuns(run)) {
+      if (previous.id === run.id || !previous.conversationId) continue;
+      if (retiredRunIds.has(previous.id)) continue;
+      retiredRunIds.add(previous.id);
+      const stopped = await sessionPort.stop({
+        conversationId: previous.conversationId,
+        agentType: previous.configSnapshot.agent.type,
+      });
+      if (!stopped.success) {
+        logger.warn('Failed to stop a superseded automation session', {
+          automationId: run.automationId,
+          runId: previous.id,
+          error: stopped.error,
+        });
+      }
+    }
+  };
 
   return async (run: AutomationRun, signal: AbortSignal): Promise<void> => {
     const provisionResult = await workspacePort.provision({
@@ -38,6 +71,8 @@ export function createAutomationRunExecutor(
 
     const { workspace, branchName } = provisionResult.data;
     if (!transitions.markStartingSession(run.id, { workspace, branchName })) return;
+
+    await retirePreviousSessions(run);
 
     const conversationId = createConversationId();
     const startResult = await sessionPort.start({

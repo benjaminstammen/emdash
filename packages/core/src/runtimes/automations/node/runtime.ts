@@ -40,6 +40,9 @@ import { AutomationRunTransitions, type OnRunChanged } from './runs/transitions'
 import { validateAutomationSchedule } from './scheduling/cron';
 import { AutomationScheduler } from './scheduling/scheduler';
 
+/** First-run sweep depth: reaps sessions leaked before a restart (or before this fix). */
+const SUPERSEDED_RUN_LOOKBACK = 2000;
+
 export type AutomationsRuntimeOptions = {
   handle: StoreHandle<AutomationsDb>;
   workspacePort: AutomationWorkspacePort;
@@ -91,6 +94,13 @@ export class AutomationsRuntime {
       transitions: this.transitions,
       workspacePort: options.workspacePort,
       sessionPort: options.sessionPort,
+      previousRuns: (run) =>
+        this.runStore.listRuns({
+          automationId: run.automationId,
+          status: 'done',
+          limit: SUPERSEDED_RUN_LOOKBACK,
+        }),
+      logger,
     });
 
     this.scheduler = new AutomationScheduler({

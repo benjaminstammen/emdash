@@ -85,6 +85,7 @@ function fakeSessionPort(options?: {
 }): AutomationSessionPort {
   return {
     start: vi.fn(options?.start ?? (() => Promise.resolve(ok({ sessionId: 'sess-1' })))),
+    stop: vi.fn(() => Promise.resolve(ok(undefined))),
   };
 }
 describe('createAutomationRunExecutor', () => {
@@ -180,5 +181,45 @@ describe('createAutomationRunExecutor', () => {
     expect(final?.status).toBe('failed');
     expect(final?.error?.code).toBe('external_cancel');
     expect(session.start).not.toHaveBeenCalled();
+  });
+
+  it('stops sessions from earlier runs once, before starting its own', async () => {
+    const run = claimedRun(handle);
+    const previous = { ...run, id: 'run-0', status: 'done' as const, conversationId: 'conv-0' };
+    const unstarted = { ...run, id: 'run-x', status: 'done' as const, conversationId: null };
+    const session = fakeSessionPort();
+    const executor = createAutomationRunExecutor({
+      transitions,
+      workspacePort: fakeWorkspacePort(),
+      sessionPort: session,
+      previousRuns: () => [run, previous, unstarted],
+    });
+
+    await executor(run, new AbortController().signal);
+    expect(session.stop).toHaveBeenCalledExactlyOnceWith({
+      conversationId: 'conv-0',
+      agentType: 'acp',
+    });
+    expect(vi.mocked(session.stop).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(session.start).mock.invocationCallOrder[0]
+    );
+
+    await executor(claimedRun(handle, { id: 'run-2' }), new AbortController().signal);
+    expect(session.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('still starts its session when stopping a predecessor fails', async () => {
+    const run = claimedRun(handle);
+    const session = fakeSessionPort();
+    vi.mocked(session.stop).mockResolvedValue(err({ code: 'runtime_unavailable' }));
+    const executor = createAutomationRunExecutor({
+      transitions,
+      workspacePort: fakeWorkspacePort(),
+      sessionPort: session,
+      previousRuns: () => [{ ...run, id: 'run-0', conversationId: 'conv-0' }],
+    });
+
+    await executor(run, new AbortController().signal);
+    expect(runStore.getRun('run-1')?.status).toBe('done');
   });
 });

@@ -43,6 +43,9 @@ export const tuiSessionStartInputSchema = z.object({
   rows: z.number().int().positive(),
 });
 
+/** Stops a session an earlier automation run started; the record stays manually resumable. */
+export const sessionStopInputSchema = z.object({ conversationId: z.string() });
+
 export const tuiSessionStartResultSchema = z.object({
   outcome: z.enum(['started', 'attached']),
 });

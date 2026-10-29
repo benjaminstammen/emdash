@@ -20,7 +20,7 @@ describe('createSessionPortFromDependencies', () => {
         createWorkspace,
         activateWorkspace,
       } as unknown as ContractClient<WorkspaceRegistryContract>,
-      acp: { startSession: start } as ContractClient<AcpSessionStartContract>,
+      acp: { startSession: start, terminate: vi.fn() } as ContractClient<AcpSessionStartContract>,
       tui: unusedTuiClient(),
       conversationIndex: { create } as unknown as ContractClient<ConversationIndexContract>,
     });
@@ -96,7 +96,7 @@ describe('createSessionPortFromDependencies', () => {
     const create = vi.fn(async () => ok({ created: true }));
     const port = createSessionPortFromDependencies({
       workspaceRegistry: activatingWorkspaceRegistry(),
-      acp: { startSession },
+      acp: { startSession, terminate: vi.fn() },
       tui: unusedTuiClient(),
       conversationIndex: { create } as unknown as ContractClient<ConversationIndexContract>,
     });
@@ -137,7 +137,7 @@ describe('createSessionPortFromDependencies', () => {
         createWorkspace: vi.fn(async () => ok({ id: 'existing-workspace' })),
         activateWorkspace,
       } as unknown as ContractClient<WorkspaceRegistryContract>,
-      acp: { startSession: start } as ContractClient<AcpSessionStartContract>,
+      acp: { startSession: start, terminate: vi.fn() } as ContractClient<AcpSessionStartContract>,
       tui: unusedTuiClient(),
       conversationIndex: creatingConversationIndex(),
     });
@@ -163,7 +163,7 @@ describe('createSessionPortFromDependencies', () => {
     const port = createSessionPortFromDependencies({
       workspaceRegistry: activatingWorkspaceRegistry(),
       acp: unusedAcpClient(),
-      tui: { startSession: start } as ContractClient<TuiSessionStartContract>,
+      tui: { startSession: start, kill: vi.fn() } as ContractClient<TuiSessionStartContract>,
       conversationIndex: { create } as unknown as ContractClient<ConversationIndexContract>,
     });
     const result = await port.start({
@@ -297,6 +297,7 @@ describe('createSessionPortFromDependencies', () => {
       acp: {
         startSession: async () =>
           err({ type: 'runtime-unavailable', message: 'ACP is unavailable' }),
+        terminate: vi.fn(),
       },
       tui: unusedTuiClient(),
       conversationIndex: creatingConversationIndex(),
@@ -307,6 +308,7 @@ describe('createSessionPortFromDependencies', () => {
         startSession: async () => {
           throw new Error('connection closed');
         },
+        terminate: vi.fn(),
       },
       tui: unusedTuiClient(),
       conversationIndex: creatingConversationIndex(),
@@ -338,6 +340,28 @@ function activatingWorkspaceRegistry(): ContractClient<WorkspaceRegistryContract
     activateWorkspace: vi.fn(async () => ok({ id: 'workspace-1' })),
   } as unknown as ContractClient<WorkspaceRegistryContract>;
 }
+describe('session port stop', () => {
+  it('terminates ACP sessions and kills TUI sessions by conversation id', async () => {
+    const terminate = vi.fn(async () => ok(undefined));
+    const kill = vi.fn(async () => err({ type: 'not-found', message: 'gone' }));
+    const port = createSessionPortFromDependencies({
+      workspaceRegistry: activatingWorkspaceRegistry(),
+      acp: { startSession: vi.fn(), terminate },
+      tui: { startSession: vi.fn(), kill },
+      conversationIndex: creatingConversationIndex(),
+    });
+
+    await expect(port.stop({ conversationId: 'acp-1', agentType: 'acp' })).resolves.toEqual(
+      ok(undefined)
+    );
+    await expect(port.stop({ conversationId: 'tui-1', agentType: 'tui' })).resolves.toEqual(
+      err({ code: 'not-found', message: 'gone' })
+    );
+    expect(terminate).toHaveBeenCalledExactlyOnceWith({ conversationId: 'acp-1' });
+    expect(kill).toHaveBeenCalledExactlyOnceWith({ conversationId: 'tui-1' });
+  });
+});
+
 function creatingConversationIndex(): ContractClient<ConversationIndexContract> {
   return {
     create: vi.fn(async () => ok({ created: true })),
@@ -345,10 +369,10 @@ function creatingConversationIndex(): ContractClient<ConversationIndexContract> 
 }
 
 function unusedAcpClient(): ContractClient<AcpSessionStartContract> {
-  return { startSession: vi.fn() };
+  return { startSession: vi.fn(), terminate: vi.fn() };
 }
 function unusedTuiClient(): ContractClient<TuiSessionStartContract> {
-  return { startSession: vi.fn() };
+  return { startSession: vi.fn(), kill: vi.fn() };
 }
 function absolute(input: string) {
   const parsed = parseAbsolute(input);

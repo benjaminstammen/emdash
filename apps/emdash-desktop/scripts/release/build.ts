@@ -34,6 +34,8 @@ const { values } = parseArgs({
     config: { type: 'string', default: 'electron-builder.config.ts' },
     channel: { type: 'string', default: 'stable' },
     'release-id': { type: 'string' },
+    // Fork builds: package on this machine without an owned GitHub draft release.
+    local: { type: 'boolean', default: false },
   },
   strict: true,
 });
@@ -82,26 +84,28 @@ if (isCanary) {
   info(`Canary build: packaging as version ${overrideVersion} (tag ${tag})`);
 }
 
-const releaseId = Number(values['release-id']);
-if (!Number.isSafeInteger(releaseId) || releaseId <= 0) {
-  fail('--release-id must be a positive integer from prepare-release');
-}
-const ghToken = requireEnv('GH_TOKEN');
-const octokit = new Octokit({ auth: ghToken });
-const { data: draft } = await octokit.rest.repos.getRelease({
-  owner: GITHUB_OWNER,
-  repo: GITHUB_REPO,
-  release_id: releaseId,
-});
-const ownership = {
-  runId: requireEnv('GITHUB_RUN_ID'),
-  sha: requireEnv('GITHUB_SHA'),
-};
-if (!draft.draft || draft.tag_name !== tag || !releaseHasOwnership(draft.body, ownership)) {
-  fail(`Release ${releaseId} is not the owned ${tag} draft for this workflow run and commit`);
-}
-if (draft.target_commitish !== ownership.sha) {
-  fail(`Release ${releaseId} targets ${draft.target_commitish}, expected ${ownership.sha}`);
+if (!values.local) {
+  const releaseId = Number(values['release-id']);
+  if (!Number.isSafeInteger(releaseId) || releaseId <= 0) {
+    fail('--release-id must be a positive integer from prepare-release');
+  }
+  const ghToken = requireEnv('GH_TOKEN');
+  const octokit = new Octokit({ auth: ghToken });
+  const { data: draft } = await octokit.rest.repos.getRelease({
+    owner: GITHUB_OWNER,
+    repo: GITHUB_REPO,
+    release_id: releaseId,
+  });
+  const ownership = {
+    runId: requireEnv('GITHUB_RUN_ID'),
+    sha: requireEnv('GITHUB_SHA'),
+  };
+  if (!draft.draft || draft.tag_name !== tag || !releaseHasOwnership(draft.body, ownership)) {
+    fail(`Release ${releaseId} is not the owned ${tag} draft for this workflow run and commit`);
+  }
+  if (draft.target_commitish !== ownership.sha) {
+    fail(`Release ${releaseId} targets ${draft.target_commitish}, expected ${ownership.sha}`);
+  }
 }
 
 step('Creating deployment directory with production dependencies');
@@ -150,11 +154,16 @@ try {
     if (!archEnum) fail(`Unknown arch: ${arch}`);
 
     const buildTargets = ebPlatform.createTarget(targetList, archEnum);
-    const config = createReleaseBuildConfig(
+    const releaseConfig = createReleaseBuildConfig(
       baseConfig,
       electronVersion,
       isCanary ? overrideVersion : undefined
     );
+    // Fuses invalidate an unsigned binary on arm64; sign ad hoc unless CSC_NAME names an identity.
+    const config =
+      values.local && !process.env.CSC_NAME
+        ? { ...releaseConfig, mac: { ...releaseConfig.mac, identity: '-' } }
+        : releaseConfig;
     const packagedApps: PackagedLanguageServerApp[] = [];
 
     await electronBuild({

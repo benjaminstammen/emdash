@@ -1,0 +1,18 @@
+diff --git a/src/unix/pty.cc b/src/unix/pty.cc
+index 7b4b9e1f990fbf95b51528bb56dc9717f5b87532..bfbc4cbaeb3c797358ec7d0c45e25d70643f61a9 100644
+--- a/src/unix/pty.cc
++++ b/src/unix/pty.cc
+@@ -777,9 +777,11 @@ pty_posix_spawn(char** argv, char** env,
+ done:
+   posix_spawn_file_actions_destroy(&acts);
+   posix_spawnattr_destroy(&attrs);
++  close(slave);
+ 
+-  for (; count > 0; count--) {
+-    close(low_fds[count]);
++  // Backport of upstream's fd leak fix: the old loop never closed low_fds[0].
++  for (size_t i = 0; i <= count && i < 3; i++) {
++    close(low_fds[i]);
+   }
+ }
+ #endif
